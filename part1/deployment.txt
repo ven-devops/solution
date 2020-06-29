@@ -1,0 +1,22 @@
+#Cmd to generate a template and inspect the helm chart: 
+cd webChart && helm template . -f values.yaml --name-template test --namespace web
+
+
+1. Deployment:
+Deployment of the webChart will be managed by helm.
+Helm3 is a single binary, all you need to pass in order to install/upgrade the chart inside a k8s cluster is a kubeconfig file.
+
+Example cmd for install/deployment:
+helm upgrade --install --history-max 10 webChart ./webChart --namespace default -f ./webChart/values.yaml  --kubeconfig /path/to/kubeconfig --atomic 
+
+Due to helm simplicity we can easily integrate helm with Jenkins.
+Deployment with jenkins can be done in the following stages:
+ Stage 1: Pull source code
+ Stage 2: Download secret files (certificates/kubeconfig etc..)
+ Stage 3: Install/Upgrade the helm chart
+ Stage 4: Cleanup
+
+2. Scaling:
+Scaling is managed by HPA object in k8s. It is based on CPU consumption.
+Both the website deployment and the istio-proxy gateway deployment will scale based on CPU consumption. Tweaking of the values is needed.
+Future improvement: Scale based on request metrics.

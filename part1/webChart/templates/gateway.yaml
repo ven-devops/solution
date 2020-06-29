@@ -1,0 +1,218 @@
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: gateway-external-lb
+  namespace: istio-system
+spec:
+  selector:
+    istio: gateway-external-lb
+  servers:
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+      - "*.{{ .Values.website }}"
+      tls:
+        httpsRedirect: false 
+    - port:
+        number: 443
+        name: https-443
+        protocol: HTTPS
+      hosts:
+      - "*.{{ .Values.domain }}"
+      tls:
+        mode: SIMPLE # enables HTTPS on this port
+        serverCertificate: /etc/istio/ingressgateway-certs/tls.crt
+        privateKey: /etc/istio/ingressgateway-certs/tls.key
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gateway-external-lb-service-account
+  namespace: istio-system
+  labels:
+    app: gateway-external-lb
+
+---
+
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  labels:
+    app: gateway-external-lb
+    istio: gateway-external-lb
+  name: gateway-external-lb
+  namespace: istio-system
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      app: gateway-external-lb
+      istio: gateway-external-lb
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+    type: RollingUpdate
+  template:
+    metadata:
+      annotations:
+        sidecar.istio.io/inject: "false"
+      labels:
+        app: gateway-external-lb
+        istio: gateway-external-lb
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - gateway-external-lb
+            topologyKey: kubernetes.io/hostname
+      containers:
+      - args:
+        - proxy
+        - router
+        - --domain
+        - $(POD_NAMESPACE).svc.cluster.local
+        - --proxyLogLevel=warning
+        - --log_output_level=default:warn
+        - --drainDuration
+        - '120s'
+        - --parentShutdownDuration
+        - '3m0s'
+        - --connectTimeout
+        - '10s'
+        - --serviceCluster
+        - gateway-external-lb
+        - --zipkinAddress
+        - $(POD_HOST_IP):9080
+        - --proxyAdminPort
+        - "15000"
+        - --statusPort
+        - "15020"
+        - --controlPlaneAuthPolicy
+        - NONE
+        - --discoveryAddress
+        - istio-pilot:15010
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        - name: INSTANCE_IP
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.podIP
+        - name: ISTIO_META_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_HOST_IP
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.hostIP
+        image: docker.io/istio/proxyv2:1.7
+        imagePullPolicy: IfNotPresent
+        name: istio-proxy
+        ports:
+        - containerPort: 15020
+          protocol: TCP
+        - containerPort: 80
+          protocol: TCP
+        - containerPort: 443
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 15
+          initialDelaySeconds: 1
+          periodSeconds: 2
+          successThreshold: 1
+          tcpSocket:
+            port: 443
+          timeoutSeconds: 1
+        livenessProbe:
+          failureThreshold: 15
+          tcpSocket:
+            port: 443
+          initialDelaySeconds: 1
+          periodSeconds: 2
+          successThreshold: 1
+          timeoutSeconds: 1
+        resources:
+          limits:
+            cpu: "2"
+            memory: 2Gi
+          requests:
+            cpu: "1"
+            memory: 1Gi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - /bin/sh
+              - -c
+              - while [ $(netstat -plunt | grep tcp | grep -v envoy | wc -l | xargs)
+                -ne 0 ]; do sleep 1; done
+        volumeMounts:
+        - mountPath: /etc/certs
+          name: istio-certs
+          readOnly: true
+        - mountPath: /etc/istio/ingressgateway-certs
+          name: ingressgateway-certs
+          readOnly: true
+        - mountPath: /etc/istio/ingressgateway-ca-certs
+          name: ingressgateway-ca-certs
+          readOnly: true
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      serviceAccount: gateway-external-lb-service-account
+      serviceAccountName: gateway-external-lb-service-account
+      terminationGracePeriodSeconds: 150
+      volumes:
+      - name: istio-certs
+        secret:
+          defaultMode: 420
+          optional: true
+          secretName: {{ .Values.tlsSecretName }}
+      - name: ingressgateway-certs
+        secret:
+          defaultMode: 420
+          optional: true
+          secretName: ingressgateway-certs
+      - name: ingressgateway-ca-certs
+        secret:
+          defaultMode: 420
+          optional: true
+          secretName: ingressgateway-ca-certs
+
+---
+
+apiVersion: autoscaling/v1
+kind: HorizontalPodAutoscaler
+metadata:
+  name: gateway-external-lb
+  namespace: istio-system
+spec:
+  maxReplicas: {{ .Values.maxReplicas }}
+  minReplicas: {{ .Values.replicas }}
+  scaleTargetRef:
+    apiVersion: apps/v1beta1
+    kind: Deployment
+    name: gateway-external-lb
+  targetCPUUtilizationPercentage: 80

@@ -1,0 +1,3 @@
+As a prerequsite we need a running k8s cluster with istio service mesh installed in the cluster.
+We can use GKE and spotinst to manage the master nodes and the worker nodes in cost efficient way.
+Deployment of the GKE cluster can be managed through terraform.
